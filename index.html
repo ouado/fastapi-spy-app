@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FastAPI DataFrame Viewer</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      #table-container {
+        margin-bottom: 24px;
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        max-width: 900px;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background: #f4f4f4;
+      }
+      #chart-container {
+        max-width: 900px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>SPY Close Price Chart</h1>
+    <p>Historical SPY close prices are fetched from <code>/data</code> and displayed here.</p>
+    <div id="chart-container">
+      <canvas id="dataChart" width="900" height="450"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      async function loadData() {
+        const response = await fetch('/data');
+        const payload = await response.json();
+        renderChart(payload.chart_data);
+      }
+
+      function renderChart(chartData) {
+        const ctx = document.getElementById('dataChart').getContext('2d');
+        new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: chartData.labels,
+            datasets: [
+              {
+                label: 'SPY Close',
+                data: chartData.close,
+                borderColor: '#007bff',
+                backgroundColor: 'rgba(0, 123, 255, 0.2)',
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Date',
+                },
+              },
+              y: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Close Price',
+                },
+              },
+            },
+          },
+        });
+      }
+
+      loadData().catch((error) => {
+        const container = document.getElementById('chart-container');
+        container.innerHTML = `<p style="color:red">Failed to load data: ${error.message}</p>`;
+      });
+    </script>
+  </body>
+</html>
