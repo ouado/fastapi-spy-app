@@ -4,7 +4,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 app = FastAPI(title="SPY Historical Data API")
 
@@ -44,3 +44,15 @@ def get_data():
 def read_root():
     index_path = Path(__file__).parent / "index.html"
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
+
+
+@app.get("/manifest.json")
+def get_manifest():
+    manifest_path = Path(__file__).parent / "manifest.json"
+    return FileResponse(manifest_path, media_type="application/manifest+json")
+
+
+@app.get("/service-worker.js")
+def get_service_worker():
+    sw_path = Path(__file__).parent / "service-worker.js"
+    return FileResponse(sw_path, media_type="application/javascript")
