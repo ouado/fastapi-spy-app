@@ -11,18 +11,59 @@
       body {
         font-family: Arial, sans-serif;
         margin: 24px;
+        background-color: #f9f9f9;
       }
       h1 {
         margin-bottom: 8px;
+        color: #333;
+      }
+      h2 {
+        margin-top: 32px;
+        margin-bottom: 16px;
+        color: #333;
+        border-bottom: 2px solid #007bff;
+        padding-bottom: 8px;
+      }
+      .metrics-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .metric-card {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      .metric-label {
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .metric-value {
+        font-size: 24px;
+        font-weight: bold;
+        color: #007bff;
+      }
+      .metric-positive {
+        color: #28a745;
+      }
+      .metric-negative {
+        color: #dc3545;
       }
       #table-container {
         margin-bottom: 24px;
         overflow-x: auto;
+        background: white;
+        border-radius: 8px;
+        padding: 16px;
       }
       table {
         border-collapse: collapse;
         width: 100%;
-        max-width: 900px;
       }
       th,
       td {
@@ -32,30 +73,263 @@
       }
       th {
         background: #f4f4f4;
+        font-weight: bold;
       }
-      #chart-container {
+      tr:hover {
+        background-color: #f9f9f9;
+      }
+      .chart-container {
         max-width: 900px;
+        margin-bottom: 24px;
+        background: white;
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .chart-frame {
+        position: relative;
+        height: 420px;
+      }
+      canvas {
+        max-width: 100%;
+      }
+      .loading {
+        text-align: center;
+        color: #666;
+      }
+      .error {
+        color: #dc3545;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 12px;
+        border-radius: 4px;
+        margin-bottom: 16px;
       }
     </style>
   </head>
   <body>
-    <h1>SPY Close Price Chart</h1>
-    <p>Historical SPY close prices are fetched from <code>/data</code> and displayed here.</p>
-    <div id="chart-container">
-      <canvas id="dataChart" width="900" height="450"></canvas>
+    <h1>SPY Analysis Dashboard</h1>
+    
+    <h2>Backtest Results</h2>
+    <div class="loading" id="backtest-loading">Loading backtest data...</div>
+    <div id="backtest-error"></div>
+    <div id="backtest-content" style="display:none;">
+      <div class="metrics-container" id="metrics-container"></div>
+      <div class="chart-container">
+        <h3>Strategy Performance Comparison</h3>
+        <div class="chart-frame">
+          <canvas id="backtestChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-container">
+        <h3>SPY Price With Composite Z-Score Signals</h3>
+        <div class="chart-frame">
+          <canvas id="signalChart"></canvas>
+        </div>
+      </div>
+      <div id="table-container">
+        <h3>Backtest Details</h3>
+        <table id="backtest-table">
+          <thead>
+            <tr id="table-header"></tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-      async function loadData() {
-        const response = await fetch('/data');
-        const payload = await response.json();
-        renderChart(payload.chart_data);
+      let backtestChart = null;
+      let signalChart = null;
+
+      function formatCurrency(value) {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          maximumFractionDigits: 0,
+        }).format(value);
       }
 
-      function renderChart(chartData) {
-        const ctx = document.getElementById('dataChart').getContext('2d');
-        new Chart(ctx, {
+      function createSharedChartOptions(yAxisTitle, valueFormatter) {
+        return {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          elements: {
+            line: {
+              borderWidth: 2,
+            },
+          },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+              labels: {
+                boxWidth: 14,
+                usePointStyle: true,
+                padding: 18,
+              },
+            },
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  const rawY = typeof context.raw === 'object' ? context.raw.y : context.parsed.y;
+                  return `${context.dataset.label}: ${valueFormatter(rawY)}`;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: {
+                autoSkip: true,
+                maxTicksLimit: 10,
+                maxRotation: 0,
+              },
+              grid: {
+                display: false,
+              },
+              title: {
+                display: true,
+                text: 'Date',
+              },
+            },
+            y: {
+              ticks: {
+                callback(value) {
+                  return valueFormatter(value);
+                },
+              },
+              grid: {
+                color: 'rgba(0, 0, 0, 0.08)',
+              },
+              title: {
+                display: true,
+                text: yAxisTitle,
+              },
+            },
+          },
+        };
+      }
+
+      async function loadBacktest() {
+        const errorContainer = document.getElementById('backtest-error');
+        const contentContainer = document.getElementById('backtest-content');
+        const loadingContainer = document.getElementById('backtest-loading');
+        
+        try {
+          const response = await fetch('/backtest');
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          const payload = await response.json();
+          
+          renderMetrics(payload.metrics);
+          renderBacktestChart(payload.chart_data);
+          renderSignalChart(payload.signal_chart_data);
+          renderBacktestTable(payload.records);
+          
+          loadingContainer.style.display = 'none';
+          contentContainer.style.display = 'block';
+        } catch (error) {
+          loadingContainer.style.display = 'none';
+          errorContainer.innerHTML = `<div class="error">Failed to load backtest data: ${error.message}</div>`;
+          console.error('Backtest error:', error);
+        }
+      }
+
+      function renderMetrics(metrics) {
+        const container = document.getElementById('metrics-container');
+        container.innerHTML = `
+          <div class="metric-card">
+            <div class="metric-label">Benchmark Total Invested</div>
+            <div class="metric-value">$${metrics.total_benchmark_invested.toFixed(2)}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Strategy Total Invested</div>
+            <div class="metric-value">$${metrics.total_test_invested.toFixed(2)}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Latest Recommended Weight</div>
+            <div class="metric-value">${metrics.latest_recommended_weight.toFixed(2)}x</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Latest Composite Z-Score</div>
+            <div class="metric-value ${metrics.latest_composite_zscore >= 0 ? 'metric-negative' : 'metric-positive'}">
+              ${metrics.latest_composite_zscore.toFixed(2)}
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Benchmark Final Value</div>
+            <div class="metric-value">$${metrics.final_benchmark_value.toFixed(2)}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Strategy Final Value</div>
+            <div class="metric-value">$${metrics.final_test_value.toFixed(2)}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Benchmark Return</div>
+            <div class="metric-value ${metrics.benchmark_return_pct >= 0 ? 'metric-positive' : 'metric-negative'}">
+              ${metrics.benchmark_return_pct.toFixed(2)}%
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Strategy Return</div>
+            <div class="metric-value ${metrics.test_return_pct >= 0 ? 'metric-positive' : 'metric-negative'}">
+              ${metrics.test_return_pct.toFixed(2)}%
+            </div>
+          </div>
+        `;
+      }
+
+      function renderBacktestChart(chartData) {
+        const ctx = document.getElementById('backtestChart').getContext('2d');
+        if (backtestChart) backtestChart.destroy();
+        
+        backtestChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: chartData.labels,
+            datasets: [
+              {
+                label: 'Benchmark (Equal Weight)',
+                data: chartData.benchmark_mtm,
+                borderColor: '#6c757d',
+                backgroundColor: 'rgba(108, 117, 125, 0.12)',
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                tension: 0.12,
+              },
+              {
+                label: 'Strategy (Zscore Weight)',
+                data: chartData.test_mtm,
+                borderColor: '#28a745',
+                backgroundColor: 'rgba(40, 167, 69, 0.12)',
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                tension: 0.12,
+              },
+            ],
+          },
+          options: {
+            ...createSharedChartOptions('Portfolio Value ($)', formatCurrency),
+            plugins: {
+              ...createSharedChartOptions('Portfolio Value ($)', formatCurrency).plugins,
+              title: {
+                display: true,
+                text: 'Portfolio Value Over Time',
+              },
+            },
+          },
+        });
+      }
+
+      function renderSignalChart(chartData) {
+        const ctx = document.getElementById('signalChart').getContext('2d');
+        if (signalChart) signalChart.destroy();
+
+        signalChart = new Chart(ctx, {
           type: 'line',
           data: {
             labels: chartData.labels,
@@ -63,38 +337,82 @@
               {
                 label: 'SPY Close',
                 data: chartData.close,
-                borderColor: '#007bff',
-                backgroundColor: 'rgba(0, 123, 255, 0.2)',
-                fill: true,
+                borderColor: '#0d6efd',
+                backgroundColor: 'rgba(13, 110, 253, 0.08)',
+                fill: false,
+                pointRadius: 0,
+                pointHoverRadius: 0,
+                tension: 0.08,
+              },
+              {
+                type: 'scatter',
+                label: 'Composite Z-Score < -3',
+                data: chartData.below_minus_3,
+                backgroundColor: '#d63384',
+                borderColor: '#d63384',
+                pointRadius: 4.5,
+                pointHoverRadius: 6,
+                pointStyle: 'triangle',
+              },
+              {
+                type: 'scatter',
+                label: 'Composite Z-Score [-3, -2)',
+                data: chartData.between_minus_3_minus_2,
+                backgroundColor: '#fd7e14',
+                borderColor: '#fd7e14',
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                pointStyle: 'rectRot',
+              },
+              {
+                type: 'scatter',
+                label: 'Composite Z-Score > 2',
+                data: chartData.above_2,
+                backgroundColor: '#198754',
+                borderColor: '#198754',
+                pointRadius: 4.5,
+                pointHoverRadius: 6,
+                pointStyle: 'circle',
               },
             ],
           },
           options: {
-            responsive: true,
-            scales: {
-              x: {
+            ...createSharedChartOptions('SPY Close Price ($)', formatCurrency),
+            plugins: {
+              ...createSharedChartOptions('SPY Close Price ($)', formatCurrency).plugins,
+              title: {
                 display: true,
-                title: {
-                  display: true,
-                  text: 'Date',
-                },
-              },
-              y: {
-                display: true,
-                title: {
-                  display: true,
-                  text: 'Close Price',
-                },
+                text: 'SPY Close With Extreme Z-Score Dates',
               },
             },
           },
         });
       }
 
-      loadData().catch((error) => {
-        const container = document.getElementById('chart-container');
-        container.innerHTML = `<p style="color:red">Failed to load data: ${error.message}</p>`;
-      });
+      function renderBacktestTable(records) {
+        const headerRow = document.getElementById('table-header');
+        const tableBody = document.getElementById('table-body');
+        
+        if (records.length === 0) return;
+        
+        // Create header
+        const headers = Object.keys(records[0]);
+        headerRow.innerHTML = headers.map(h => `<th>${h}</th>`).join('');
+        
+        // Create rows (show last 52 entries for weekly data)
+        const displayRecords = records.slice(-52);
+        tableBody.innerHTML = displayRecords.map(record => 
+          `<tr>${headers.map(h => {
+            let value = record[h];
+            if (typeof value === 'number') {
+              value = value.toFixed(2);
+            }
+            return `<td>${value}</td>`;
+          }).join('')}</tr>`
+        ).join('');
+      }
+
+      loadBacktest();
 
       // Register service worker for PWA
       if ('serviceWorker' in navigator) {
