@@ -76,8 +76,8 @@ def run_weekly_backtest(df: pd.DataFrame, weekly_amount: float = 1.0 / 52) -> pd
     test_invested = 0.0
 
     for i in range(100, len(df) - 1):
-        if df.index[i].weekday() == 3:
-            next_close = df["Close"].iloc[i + 1]
+        if df.index[i].weekday() == 4:  # Only invest on Fridays
+            next_close = df["Close"].iloc[i]
             weight = get_investment_weight(df["composite_zscore_weighted"].iloc[i])
 
             benchmark_invested += weekly_amount

@@ -113,6 +113,7 @@
     <div class="loading" id="backtest-loading">Loading backtest data...</div>
     <div id="backtest-error"></div>
     <div id="backtest-content" style="display:none;">
+      <div class="metrics-container" id="live-container"></div>
       <div class="metrics-container" id="metrics-container"></div>
       <div class="chart-container">
         <h3>Strategy Performance Comparison</h3>
@@ -126,8 +127,21 @@
           <canvas id="signalChart"></canvas>
         </div>
       </div>
+      <div id="zscore-container" style="margin-bottom:24px;background:white;border-radius:8px;padding:16px;overflow-x:auto;">
+        <h3>Last 10 Trading Days: Composite Z-Score &amp; Investment Weight</h3>
+        <table id="zscore-table" style="border-collapse:collapse;width:100%;">
+          <thead>
+            <tr>
+              <th style="border:1px solid #ddd;padding:8px;background:#f4f4f4;">Date</th>
+              <th style="border:1px solid #ddd;padding:8px;background:#f4f4f4;">Composite Z-Score</th>
+              <th style="border:1px solid #ddd;padding:8px;background:#f4f4f4;">Investment Weight</th>
+            </tr>
+          </thead>
+          <tbody id="zscore-body"></tbody>
+        </table>
+      </div>
       <div id="table-container">
-        <h3>Backtest Details</h3>
+        <h3>Backtest Details (last 52 weeks, most recent first)</h3>
         <table id="backtest-table">
           <thead>
             <tr id="table-header"></tr>
@@ -228,14 +242,42 @@
           renderMetrics(payload.metrics);
           renderBacktestChart(payload.chart_data);
           renderSignalChart(payload.signal_chart_data);
+          renderRecentZscores(payload.recent_zscores);
           renderBacktestTable(payload.records);
           
           loadingContainer.style.display = 'none';
           contentContainer.style.display = 'block';
+          loadLive();
         } catch (error) {
           loadingContainer.style.display = 'none';
           errorContainer.innerHTML = `<div class="error">Failed to load backtest data: ${error.message}</div>`;
           console.error('Backtest error:', error);
+        }
+      }
+
+      async function loadLive() {
+        try {
+          const res = await fetch('/live');
+          if (!res.ok) return;
+          const data = await res.json();
+          const container = document.getElementById('live-container');
+          const zClass = data.live_composite_zscore >= 0 ? 'metric-negative' : 'metric-positive';
+          container.innerHTML = `
+            <div class="metric-card">
+              <div class="metric-label">SPY Live Price</div>
+              <div class="metric-value">$${data.live_price.toFixed(2)}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Live Composite Z-Score</div>
+              <div class="metric-value ${zClass}">${data.live_composite_zscore.toFixed(2)}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Live Investment Weight</div>
+              <div class="metric-value">${data.live_weight.toFixed(2)}x</div>
+            </div>
+          `;
+        } catch (e) {
+          console.error('Live price error:', e);
         }
       }
 
@@ -389,6 +431,19 @@
         });
       }
 
+      function renderRecentZscores(rows) {
+        const tbody = document.getElementById('zscore-body');
+        if (!rows || rows.length === 0) return;
+        tbody.innerHTML = rows.map(row => {
+          const zClass = row.zscore < -2 ? 'metric-positive' : row.zscore > 2 ? 'metric-negative' : '';
+          return `<tr>
+            <td style="border:1px solid #ddd;padding:8px;">${row.date}</td>
+            <td style="border:1px solid #ddd;padding:8px;" class="${zClass}">${row.zscore.toFixed(4)}</td>
+            <td style="border:1px solid #ddd;padding:8px;">${row.weight.toFixed(4)}x</td>
+          </tr>`;
+        }).join('');
+      }
+
       function renderBacktestTable(records) {
         const headerRow = document.getElementById('table-header');
         const tableBody = document.getElementById('table-body');
@@ -399,8 +454,8 @@
         const headers = Object.keys(records[0]);
         headerRow.innerHTML = headers.map(h => `<th>${h}</th>`).join('');
         
-        // Create rows (show last 52 entries for weekly data)
-        const displayRecords = records.slice(-52);
+        // Sort descending by date and show last 52 entries
+        const displayRecords = records.slice().reverse().slice(0, 52);
         tableBody.innerHTML = displayRecords.map(record => 
           `<tr>${headers.map(h => {
             let value = record[h];

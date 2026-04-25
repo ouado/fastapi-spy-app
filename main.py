@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yfinance as yf
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,11 +95,62 @@ def get_backtest():
         else 0,
     }
 
+    recent_zscores_df = df[["composite_zscore_weighted"]].dropna().tail(10).reset_index()
+    recent_zscores_df["Date"] = recent_zscores_df["Date"].dt.strftime("%Y-%m-%d")
+    recent_zscores_df["weight"] = recent_zscores_df["composite_zscore_weighted"].apply(get_investment_weight)
+    recent_zscores = [
+        {"date": row["Date"], "zscore": float(row["composite_zscore_weighted"]), "weight": float(row["weight"])}
+        for _, row in recent_zscores_df.iloc[::-1].iterrows()
+    ]
+
     return {
         "records": records,
         "chart_data": chart_data,
         "signal_chart_data": signal_chart_data,
         "metrics": metrics,
+        "recent_zscores": recent_zscores,
+    }
+
+
+@app.get("/live")
+def get_live():
+    """Fetch live SPY price and compute intraday-adjusted investment weight."""
+    # Need enough history for a full 100-day rolling window across all periods (max period=60)
+    df = download_spy_data(start_date=(pd.Timestamp.today() - pd.DateOffset(days=300)).strftime("%Y-%m-%d"))
+    df = compute_return_zscores(df, window=100)
+
+    ticker = yf.Ticker("SPY")
+    try:
+        live_price = float(ticker.fast_info["last_price"])
+    except Exception:
+        live_price = float(df["Close"].iloc[-1])
+
+    # For each period p, the p-day return at the last bar = close[-1] / close[-p-1] - 1
+    # The live version replaces close[-1] with live_price, but the reference close is close[-p] back from today
+    # Since live_price represents *today* (one day after close[-1]), the reference close is close[-p] from today's perspective
+    periods = [1, 5, 10, 20, 60]
+    weights = {1: 1 / 96, 5: 5 / 96, 10: 10 / 96, 20: 20 / 96, 60: 60 / 96}
+
+    close = df["Close"]
+    live_composite = 0.0
+    for p in periods:
+        # Match pct_change(p) at the latest bar: close[-1] / close[-(p+1)] - 1.
+        # Replacing close[-1] with live_price keeps the live and historical definitions aligned.
+        ref_close = float(close.iloc[-(p + 1)])
+        live_p_return = (live_price / ref_close - 1) * 100
+
+        mean_p = float(df[f"{p}d_return"].rolling(100).mean().iloc[-1])
+        std_p = float(df[f"{p}d_return"].rolling(100).std().iloc[-1])
+        live_p_zscore = (live_p_return - mean_p) / std_p if std_p != 0 else 0.0
+
+        live_composite += weights[p] * live_p_zscore
+
+    live_weight = float(get_investment_weight(live_composite))
+
+    return {
+        "live_price": live_price,
+        "live_composite_zscore": live_composite,
+        "live_weight": live_weight,
     }
 
 
